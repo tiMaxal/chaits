@@ -1,0 +1,39 @@
+# Account data files - contains private chat history exports
+# Keep directory structure visible, but ignore all file contents
+.aiccounts/**/*.json
+.aiccounts/**/*.csv
+.aiccounts/**/*.txt
+.aiccounts/**/*.db
+# Keep README files visible
+!.aiccounts/**/README.md
+
+# Grok-specific: ignore prod-mc-asset-server directories
+.aiccounts/accounts_grok/*/prod-mc-asset-server/
+
+# Database files - contains indexed private data
+db/*.sqlite
+db/*.sqlite-journal
+db/*.db
+db/*.db-journal
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Export files - may contain private conversation data
+chaits_exports/*.csv
+chaits_exports/*.json
+
+# Snapshots - may contain configuration with private paths
+.snapshots/config.json
+
+# Personal data archives (created by sync_personal_data.py)
+chaits_private_data_*.zip
+.aiccounts/accounts_claude/ai_claude_553rdd4_data-2025-12-27-07-01-06-batch-0000.zip
+/chaits_hist
+*.zip
+*.lnk
+
+# VS Code extension packages
+*.vsix

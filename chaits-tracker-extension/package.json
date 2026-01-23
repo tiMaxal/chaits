@@ -1,0 +1,241 @@
+{
+  "name": "chaits-tracker",
+  "displayName": "Chaits Timestamp Tracker",
+  "description": "Track per-message timestamps for Copilot chats across all workspaces - enables accurate project timeline reconstruction",
+  "version": "0.1.0",
+  "publisher": "chaits",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Data Science"
+  ],
+  "keywords": [
+    "copilot",
+    "chat",
+    "timestamp",
+    "tracking",
+    "timeline",
+    "correlation"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "chaits.openSettings",
+        "title": "Chaits: Open Settings",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "chaits.viewTimeline",
+        "title": "Chaits: View Chat Timeline",
+        "icon": "$(history)"
+      },
+      {
+        "command": "chaits.exportData",
+        "title": "Chaits: Export Timestamp Data",
+        "icon": "$(export)"
+      },
+      {
+        "command": "chaits.showStatus",
+        "title": "Chaits: Show Tracking Status"
+      },
+      {
+        "command": "chaits.setupPreferences",
+        "title": "Chaits: Configure Date/Time Preferences",
+        "icon": "$(settings-gear)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "chaits-tracker",
+          "title": "Chaits Tracker",
+          "icon": "$(history)"
+        }
+      ]
+    },
+    "views": {
+      "chaits-tracker": [
+        {
+          "id": "chaitsTimeline",
+          "name": "Chat Timeline",
+          "icon": "$(history)",
+          "contextualTitle": "Chaits Timeline"
+        },
+        {
+          "id": "chaitsSettings",
+          "name": "Settings",
+          "icon": "$(gear)",
+          "contextualTitle": "Chaits Settings"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Chaits Tracker",
+      "properties": {
+        "chaits.tracking.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable timestamp tracking for Copilot chats",
+          "order": 1
+        },
+        "chaits.tracking.storage": {
+          "type": "string",
+          "enum": [
+            "global",
+            "workspace"
+          ],
+          "default": "global",
+          "description": "Where to store timestamp data (global = syncs across machines)",
+          "order": 2
+        },
+        "chaits.tracking.includeContent": {
+          "type": "boolean",
+          "default": true,
+          "description": "Store message content along with timestamps (disable for privacy)",
+          "order": 3
+        },
+        "chaits.correlate.gitCommits": {
+          "type": "boolean",
+          "default": true,
+          "description": "Link chat timestamps with Git commit activity",
+          "order": 4
+        },
+        "chaits.correlate.fileEdits": {
+          "type": "boolean",
+          "default": true,
+          "description": "Track file edit timestamps for correlation",
+          "order": 5
+        },
+        "chaits.export.autoExport": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically export data daily to chaits format",
+          "order": 6
+        },
+        "chaits.export.path": {
+          "type": "string",
+          "default": "",
+          "description": "Custom export path (blank = use .aiccounts/accounts_copilot/)",
+          "order": 7
+        },
+        "chaits.privacy.excludeWorkspaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of workspace names to exclude from tracking",
+          "order": 8
+        },
+        "chaits.ui.statusBar": {
+          "type": "string",
+          "enum": [
+            "icon",
+            "text",
+            "hidden"
+          ],
+          "enumDescriptions": [
+            "Show icon only (minimal)",
+            "Show icon and text",
+            "Hide status bar item"
+          ],
+          "default": "icon",
+          "description": "Status bar display mode",
+          "order": 9
+        },
+        "chaits.format.locale": {
+          "type": "string",
+          "enum": [
+            "en-AU",
+            "en-US",
+            "en-GB",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Australia (DD/MM/YYYY, 24hr)",
+            "United States (MM/DD/YYYY, 12hr AM/PM)",
+            "United Kingdom (DD/MM/YYYY, 24hr)",
+            "Auto-detect from VS Code settings"
+          ],
+          "default": "auto",
+          "description": "Locale for date/time formatting",
+          "order": 10
+        },
+        "chaits.format.dateFormat": {
+          "type": "string",
+          "enum": [
+            "YYYY-MM-DD",
+            "DD/MM/YYYY",
+            "MM/DD/YYYY",
+            "DD-MMM-YYYY",
+            "locale"
+          ],
+          "enumDescriptions": [
+            "ISO 8601 (2026-01-23) - recommended for sorting",
+            "Australian/UK format (23/01/2026)",
+            "US format (01/23/2026)",
+            "Human-readable (23-Jan-2026)",
+            "Use locale default"
+          ],
+          "default": "YYYY-MM-DD",
+          "description": "Date display format",
+          "order": 11
+        },
+        "chaits.format.timeFormat": {
+          "type": "string",
+          "enum": [
+            "24hr",
+            "12hr",
+            "locale"
+          ],
+          "enumDescriptions": [
+            "24-hour time (14:30:45)",
+            "12-hour with AM/PM (2:30:45 PM)",
+            "Use locale default"
+          ],
+          "default": "24hr",
+          "description": "Time display format",
+          "order": 12
+        },
+        "chaits.format.timezone": {
+          "type": "string",
+          "default": "local",
+          "description": "Timezone for timestamps (e.g., 'Australia/Sydney', 'UTC', 'local' for system timezone)",
+          "order": 13
+        },
+        "chaits.setup.completed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether initial setup wizard has been completed",
+          "order": 14
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "install-local": "code --install-extension chaits-tracker-0.1.0.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.x",
+    "@typescript-eslint/parser": "^6.x",
+    "eslint": "^8.x",
+    "typescript": "^5.3.x",
+    "@vscode/test-electron": "^2.3.x"
+  },
+  "dependencies": {}
+}

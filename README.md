@@ -58,6 +58,12 @@ Example:
 python export_workspace_chats.py  # GUI mode with multi-select
 ```
 
+**Export Options:**
+- **In Workspace**: Saves to each workspace's `.vscode/copilot_history/` directory
+- **Custom Directory**: 
+  - **With "to subdirs" checked** (default): Creates organized subdirectories per workspace
+  - **With "to subdirs" unchecked**: Places all files directly in the custom directory (flattened)
+
 **Database Export** (JSON for indexing):
 ```bash
 python export_vscode_copilot.py  # GUI or --cli mode

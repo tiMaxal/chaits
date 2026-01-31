@@ -253,7 +253,7 @@ def extract_text_recursive(obj, max_depth=5, current_depth=0):
     
     return texts
 
-def export_workspace_chats_to_md(workspace_info, output_dir=None, debug=False, conflict_mode='suffix'):
+def export_workspace_chats_to_md(workspace_info, output_dir=None, debug=False, conflict_mode='suffix', use_subdirs=True):
     """
     Export all chats for a specific workspace as numbered markdown files.
     
@@ -262,6 +262,7 @@ def export_workspace_chats_to_md(workspace_info, output_dir=None, debug=False, c
         output_dir: Custom output directory (defaults to workspace/.vscode/copilot_history)
         debug: If True, save unparseable responses to debug file
         conflict_mode: How to handle existing files - 'overwrite' or 'suffix'
+        use_subdirs: If True and output_dir is set, create workspace subdirectories
     
     Returns:
         Number of chats exported, output path
@@ -271,7 +272,20 @@ def export_workspace_chats_to_md(workspace_info, output_dir=None, debug=False, c
     
     # Determine output directory
     if output_dir:
-        output_path = Path(output_dir)
+        if use_subdirs:
+            # Create subdirectory for this workspace in custom output directory
+            # Use workspace name if available, otherwise use hash
+            if workspace_info['name'] and workspace_info['name'] != f"Workspace {workspace_info['hash'][:8]}":
+                # Clean workspace name for directory use
+                clean_name = re.sub(r'[<>:"/\\|?*]', '_', workspace_info['name'])
+                subdir_name = clean_name
+            else:
+                subdir_name = workspace_info['hash'][:16]  # Use first 16 chars of hash
+            
+            output_path = Path(output_dir) / subdir_name
+        else:
+            # Use custom directory directly without subdirectories
+            output_path = Path(output_dir)
     elif workspace_info['path']:
         # Save in workspace's .vscode/copilot_history
         output_path = Path(workspace_info['path']) / '.vscode' / 'copilot_history'
@@ -447,7 +461,7 @@ class WorkspaceChatsExporterGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("VS Code Workspace Chat Exporter")
-        self.geometry("900x700")
+        self.geometry("900x850")
         self.bind("<Escape>", lambda e: self.quit())
         
         # Header
@@ -519,19 +533,23 @@ class WorkspaceChatsExporterGUI(tk.Tk):
         tk.Radiobutton(options_frame, text="Custom Directory", 
                       variable=self.output_var, value="custom").pack(side="left", padx=5)
         
-        self.custom_dir_btn = tk.Button(options_frame, text="📁 Choose...", 
+        self.custom_dir_var = tk.StringVar()
+        self.custom_dir_entry = tk.Entry(options_frame, textvariable=self.custom_dir_var, 
+                                        width=35, state="disabled")
+        self.custom_dir_entry.pack(side="left", padx=5)
+        
+        self.custom_dir_btn = tk.Button(options_frame, text="...", 
                                        command=self.choose_output_dir,
-                                       state="disabled")
-        self.custom_dir_btn.pack(side="left", padx=5)
+                                       state="disabled", width=3)
+        self.custom_dir_btn.pack(side="left", padx=2)
+        
+        self.subdirs_var = tk.BooleanVar(value=True)
+        self.subdirs_check = tk.Checkbutton(options_frame, text="to subdirs", 
+                                           variable=self.subdirs_var,
+                                           state="disabled")
+        self.subdirs_check.pack(side="left", padx=2)
         
         self.output_var.trace('w', lambda *args: self.toggle_custom_dir())
-        
-        self.custom_dir = None
-        
-        # Debug option
-        self.debug_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(options_frame, text="Debug mode (save unparseable responses)", 
-                      variable=self.debug_var).pack(side="left", padx=15)
         
         # Conflict handling frame
         conflict_frame = tk.Frame(self)
@@ -546,6 +564,11 @@ class WorkspaceChatsExporterGUI(tk.Tk):
         tk.Radiobutton(conflict_frame, text="Skip existing", 
                       variable=self.conflict_var, value="skip").pack(side="left", padx=5)
         
+        # Debug option
+        self.debug_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(conflict_frame, text="Debug mode (save unparseable responses)", 
+                      variable=self.debug_var).pack(side="left", padx=15)
+        
         # Buttons frame
         btn_frame = tk.Frame(self)
         btn_frame.pack(fill="x", padx=10, pady=10)
@@ -559,6 +582,10 @@ class WorkspaceChatsExporterGUI(tk.Tk):
                  bg="#4CAF50", fg="white", 
                  font=("Arial", 11, "bold"),
                  padx=20, pady=8).pack(side="left", padx=5)
+        
+        tk.Button(btn_frame, text="❓ Help", 
+                 command=self.show_help,
+                 bg="#FFC107", fg="black", padx=15, pady=8).pack(side="left", padx=5)
         
         tk.Button(btn_frame, text="Exit", 
                  command=self.quit,
@@ -582,15 +609,61 @@ class WorkspaceChatsExporterGUI(tk.Tk):
     
     def toggle_custom_dir(self):
         if self.output_var.get() == "custom":
+            self.custom_dir_entry.config(state="normal")
             self.custom_dir_btn.config(state="normal")
+            self.subdirs_check.config(state="normal")
         else:
+            self.custom_dir_entry.config(state="disabled")
             self.custom_dir_btn.config(state="disabled")
+            self.subdirs_check.config(state="disabled")
     
     def choose_output_dir(self):
         dir_path = filedialog.askdirectory(title="Select Output Directory")
         if dir_path:
-            self.custom_dir = dir_path
+            self.custom_dir_var.set(dir_path)
             self.log(f"📁 Custom output: {dir_path}")
+    
+    def show_help(self):
+        """Display help information"""
+        help_text = """VS Code Workspace Chat Exporter - Help
+
+📁 OUTPUT OPTIONS:
+
+• In Workspace (.vscode/copilot_history/)
+  Saves chats to each workspace's own .vscode/copilot_history/ directory.
+  Preserves history when workspace directories are renamed.
+
+• Custom Directory
+  - Enter path manually OR click "..." to browse
+  - "to subdirs" CHECKED (default): Creates organized subdirectories
+    for each workspace (e.g., CustomDir/workspace1/, CustomDir/workspace2/)
+  - "to subdirs" UNCHECKED: Places ALL files from ALL workspaces
+    directly into the custom directory (flattened, may cause naming conflicts)
+
+🔄 FILE CONFLICT HANDLING:
+
+• Add numbered suffix: Creates file_1.md, file_2.md, etc.
+• Overwrite existing: Replaces existing files with same number
+• Skip existing: Leaves existing files unchanged
+
+🔍 WORKSPACE SELECTION:
+
+• Filter: Search by workspace name or path
+• Select All / None: Bulk selection controls
+• Multi-select: Ctrl+click or Shift+click to select multiple
+• Sort: Click column headers to sort by Name, Path, or Chat count
+
+🐛 DEBUG MODE:
+
+Saves unparseable response structures to _debug_*.json files
+for troubleshooting export issues.
+
+⏱️ ENHANCED TIMESTAMPS:
+
+If chaits-tracker extension is installed, per-message timestamps
+are automatically loaded and included in exports.
+"""
+        messagebox.showinfo("Help - Workspace Chat Exporter", help_text)
     
     def select_all(self):
         """Select all visible items in the tree"""
@@ -709,13 +782,15 @@ class WorkspaceChatsExporterGUI(tk.Tk):
                                    "\n\nPlease use custom directory option.")
                 return
         
-        # Determine output directory
+        # Determine output directory and subdirs flag
         output_dir = None
+        use_subdirs = False
         if self.output_var.get() == "custom":
-            if not self.custom_dir:
-                messagebox.showwarning("No Directory", "Please choose a custom output directory.")
+            output_dir = self.custom_dir_var.get().strip()
+            if not output_dir:
+                messagebox.showwarning("No Directory", "Please enter or choose a custom output directory.")
                 return
-            output_dir = self.custom_dir
+            use_subdirs = self.subdirs_var.get()
         
         # Export in background thread
         def export_thread():
@@ -727,11 +802,8 @@ class WorkspaceChatsExporterGUI(tk.Tk):
                     self.log(f"\n[{idx}/{len(selected_workspaces)}] 📤 Exporting: {ws_name}")
                     self.log(f"   Storage: {workspace_info['hash'][:16]}...")
                     
-                    # Use workspace-specific output dir if not custom
-                    ws_output_dir = output_dir
-                    
                     count, output_path = export_workspace_chats_to_md(
-                        workspace_info, ws_output_dir, debug=debug_mode, conflict_mode=conflict_mode
+                        workspace_info, output_dir, debug=debug_mode, conflict_mode=conflict_mode, use_subdirs=use_subdirs
                     )
                     
                     self.log(f"   [+] {count} chats → {output_path}")

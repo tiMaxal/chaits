@@ -756,8 +756,12 @@ class Chaits(tk.Tk):
         """, (svc,acc,cid)).fetchall()
         conn.close()
 
+        self.show_conversation_window(svc, acc, cid, msgs, focus_mid=mid)
+
+    def show_conversation_window(self, service, account, conversation_id, msgs, focus_mid=None):
+        """Render a conversation window from a list of messages."""
         w = tk.Toplevel(self)
-        w.title(f"{svc}/{acc}")
+        w.title(f"{service}/{account}")
         w.geometry("800x600")
         w.bind("<Escape>", lambda e: w.destroy())
         
@@ -777,10 +781,11 @@ class Chaits(tk.Tk):
 
         btn_frame = tk.Frame(w)
         btn_frame.pack(fill="x", pady=5)
-        tk.Button(btn_frame, text="Similar (other accounts)",
-                  command=lambda: self.show(similar_other_accounts(mid, acc))).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="Find follow-ups",
-                  command=lambda: self.show(followups(mid))).pack(side="left", padx=5)
+        if focus_mid is not None:
+            tk.Button(btn_frame, text="Similar (other accounts)",
+                      command=lambda: self.show(similar_other_accounts(focus_mid, account))).pack(side="left", padx=5)
+            tk.Button(btn_frame, text="Find follow-ups",
+                      command=lambda: self.show(followups(focus_mid))).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Exit", command=w.destroy, bg="red", fg="white").pack(side="right", padx=5)
         
         w.focus_set()
@@ -1141,7 +1146,7 @@ For more details, see chaits.README.md"""
         scrollbar.pack(side="right", fill="y")
         tree.pack(fill="both", expand=True, pady=(0, 5))
         
-        tree.bind("<Double-1>", lambda e: self.open_conversation_from_browser(tree))
+        tree.bind("<Double-1>", lambda e: self.open_conversation_from_browser(tree, e))
         
         # Exit button
         tk.Button(browser, text="Exit", command=browser.destroy, bg="red", fg="white").pack(pady=5, padx=20, fill="x")
@@ -1200,13 +1205,19 @@ For more details, see chaits.README.md"""
             tree.insert("", "end", values=(service, account, title, msg_count, latest_str),
                        tags=(service, account, cid))
     
-    def open_conversation_from_browser(self, tree):
+    def open_conversation_from_browser(self, tree, event=None):
         """Open selected conversation from browser"""
-        selection = tree.selection()
-        if not selection:
+        item_id = None
+        if event is not None:
+            item_id = tree.identify_row(event.y)
+        if not item_id:
+            selection = tree.selection()
+            if selection:
+                item_id = selection[0]
+        if not item_id:
             return
         
-        tags = tree.item(selection[0], "tags")
+        tags = tree.item(item_id, "tags")
         if len(tags) < 3:
             return
         

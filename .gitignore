@@ -38,3 +38,6 @@ chaits_private_data_*.zip
 # VS Code extension packages
 *.vsix
 /.vscode/copilot_history
+/output/.aiccounts
+/output/db
+/output

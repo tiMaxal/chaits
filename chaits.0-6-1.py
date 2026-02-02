@@ -6,13 +6,20 @@ import threading
 import time
 import os
 import subprocess
+import sys
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 
-import numpy as np
-from sentence_transformers import SentenceTransformer
+try:
+    import numpy as np
+    from sentence_transformers import SentenceTransformer
+    SEMANTIC_AVAILABLE = True
+except Exception:
+    np = None
+    SentenceTransformer = None
+    SEMANTIC_AVAILABLE = False
 
 # ===================== CONFIG =====================
 
@@ -34,6 +41,8 @@ SEMANTIC_LIMIT = 20
 FOLLOWUP_SIMILARITY = 0.25
 AUDIT_MODE = False  # Read-only mode
 MAX_CELL_CHARS = 32000  # Excel/LibreOffice/OnlyOffice: 32767, Google Sheets: 50000 - using 32000 for compatibility
+
+SEMANTIC_ENABLED = SEMANTIC_AVAILABLE
 
 _model = None  # Lazy-loaded on first use
 
@@ -95,15 +104,21 @@ def set_prompt_status(status):
 def get_model():
     """Lazy-load the sentence transformer model"""
     global _model
+    if not SEMANTIC_AVAILABLE:
+        raise RuntimeError("Semantic dependencies are not available")
     if _model is None:
         _model = SentenceTransformer(EMBED_MODEL_NAME)
     return _model
 
 def embed_text(text: str) -> bytes:
+    if not SEMANTIC_AVAILABLE:
+        raise RuntimeError("Semantic dependencies are not available")
     vec = get_model().encode([text], normalize_embeddings=True)[0]
     return vec.astype(np.float32).tobytes()
 
 def cosine_distance(a: bytes, b: bytes) -> float:
+    if not SEMANTIC_AVAILABLE:
+        return 1.0
     v1 = np.frombuffer(a, dtype=np.float32)
     v2 = np.frombuffer(b, dtype=np.float32)
     return 1.0 - float(np.dot(v1, v2))
@@ -161,6 +176,36 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+
+def semantic_ready() -> bool:
+    return SEMANTIC_AVAILABLE and SEMANTIC_ENABLED
+
+def try_install_semantic_deps() -> bool:
+    """Attempt to install optional semantic dependencies via pip."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "sentence-transformers", "numpy"],
+            capture_output=True,
+            text=True,
+            timeout=600
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+def refresh_semantic_imports() -> bool:
+    """Try to import semantic dependencies after installation."""
+    global np, SentenceTransformer, SEMANTIC_AVAILABLE
+    try:
+        import numpy as _np
+        from sentence_transformers import SentenceTransformer as _SentenceTransformer
+        np = _np
+        SentenceTransformer = _SentenceTransformer
+        SEMANTIC_AVAILABLE = True
+        return True
+    except Exception:
+        SEMANTIC_AVAILABLE = False
+        return False
 
 # ===================== IMPORT HELPERS =====================
 
@@ -420,8 +465,9 @@ def index_json(service, account, path):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (service, account, cid, title, ts_raw, ts_utc, role, content, h))
                     mid = c.lastrowid
-                    emb = embed_text(content)
-                    c.execute("INSERT INTO embeddings VALUES (?,?)", (mid, emb))
+                    if semantic_ready():
+                        emb = embed_text(content)
+                        c.execute("INSERT INTO embeddings VALUES (?,?)", (mid, emb))
                 except sqlite3.IntegrityError:
                     pass
         conn.commit()
@@ -475,6 +521,8 @@ def fts_search(query):
     return rows
 
 def semantic_search(text):
+    if not semantic_ready():
+        raise RuntimeError("Semantic search is disabled or unavailable")
     qemb = embed_text(text)
     conn = sqlite3.connect(DB_PATH)
     conn.create_function("cosine_distance", 2, cosine_distance)
@@ -492,6 +540,8 @@ def semantic_search(text):
     return rows
 
 def hybrid_search(query, limit=200):
+    if not semantic_ready():
+        raise RuntimeError("Hybrid search is disabled or unavailable")
     qemb = embed_text(query)
     conn = sqlite3.connect(DB_PATH)
     conn.create_function("cosine_distance", 2, cosine_distance)
@@ -512,6 +562,8 @@ def hybrid_search(query, limit=200):
     return ranked
 
 def similar_other_accounts(mid, account):
+    if not semantic_ready():
+        return []
     conn = sqlite3.connect(DB_PATH)
     conn.create_function("cosine_distance", 2, cosine_distance)
     c = conn.cursor()
@@ -532,6 +584,8 @@ def similar_other_accounts(mid, account):
     return rows
 
 def followups(mid):
+    if not semantic_ready():
+        return []
     conn = sqlite3.connect(DB_PATH)
     conn.create_function("cosine_distance", 2, cosine_distance)
     c = conn.cursor()
@@ -728,8 +782,10 @@ class Chaits(tk.Tk):
         self.q = tk.Entry(top, font=("Arial", 14))
         self.q.pack(side="left", fill="x", expand=True, padx=5)
         tk.Button(top, text="Keyword", command=self.keyword).pack(side="left")
-        tk.Button(top, text="Semantic", command=self.semantic).pack(side="left")
-        tk.Button(top, text="Hybrid", command=self.hybrid).pack(side="left")
+        self.btn_semantic = tk.Button(top, text="Semantic", command=self.semantic)
+        self.btn_semantic.pack(side="left")
+        self.btn_hybrid = tk.Button(top, text="Hybrid", command=self.hybrid)
+        self.btn_hybrid.pack(side="left")
         tk.Button(top, text="🔄 Refresh", command=self.manual_refresh).pack(side="left")
         tk.Button(top, text="📁 Import", command=self.import_file).pack(side="left")
         tk.Button(top, text="📊 Export", command=self.export_menu).pack(side="left")
@@ -789,9 +845,21 @@ class Chaits(tk.Tk):
         self.fill(fts_search(self.q.get()))
 
     def semantic(self):
+        if not semantic_ready():
+            messagebox.showwarning(
+                "Semantic Search Disabled",
+                "Semantic search is unavailable because optional dependencies are not installed."
+            )
+            return
         self.fill(semantic_search(self.q.get()))
 
     def hybrid(self):
+        if not semantic_ready():
+            messagebox.showwarning(
+                "Hybrid Search Disabled",
+                "Hybrid search is unavailable because optional dependencies are not installed."
+            )
+            return
         self.fill(hybrid_search(self.q.get()))
 
     def open_convo(self, _):
@@ -835,10 +903,14 @@ class Chaits(tk.Tk):
         btn_frame = tk.Frame(w)
         btn_frame.pack(fill="x", pady=5)
         if focus_mid is not None:
-            tk.Button(btn_frame, text="Similar (other accounts)",
-                      command=lambda: self.show(similar_other_accounts(focus_mid, account))).pack(side="left", padx=5)
-            tk.Button(btn_frame, text="Find follow-ups",
-                      command=lambda: self.show(followups(focus_mid))).pack(side="left", padx=5)
+            if semantic_ready():
+                tk.Button(btn_frame, text="Similar (other accounts)",
+                          command=lambda: self.show(similar_other_accounts(focus_mid, account))).pack(side="left", padx=5)
+                tk.Button(btn_frame, text="Find follow-ups",
+                          command=lambda: self.show(followups(focus_mid))).pack(side="left", padx=5)
+            else:
+                tk.Button(btn_frame, text="Similar (other accounts)", state="disabled").pack(side="left", padx=5)
+                tk.Button(btn_frame, text="Find follow-ups", state="disabled").pack(side="left", padx=5)
         tk.Button(btn_frame, text="Exit", command=w.destroy, bg="red", fg="white").pack(side="right", padx=5)
         
         w.focus_set()
@@ -1042,7 +1114,7 @@ class Chaits(tk.Tk):
     def show_donation(self):
         """Show donation information and open donation page"""
         # Placeholder URL - to be updated when timax.al donation page is ready
-        donation_url = "https://timax.al/donate"  # TODO: Update with actual donation page URL
+        donation_url = "https://timax.al/HTML/donate"
         
         message = (
             "Support chaits Development\n\n"
@@ -1307,6 +1379,55 @@ For more details, see chaits.README.md"""
         
         # Prompt user
         self.show_extension_install_dialog()
+
+    def set_semantic_ui_state(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+        self.btn_semantic.config(state=state)
+        self.btn_hybrid.config(state=state)
+        if enabled:
+            self.status_bar.config(text="Ready. Semantic search enabled.")
+        else:
+            self.status_bar.config(text="Ready. Semantic search disabled (optional deps missing).")
+
+    def check_semantic_prompt(self):
+        """Prompt to install semantic dependencies or disable semantic features."""
+        global SEMANTIC_ENABLED
+        if SEMANTIC_AVAILABLE:
+            self.set_semantic_ui_state(True)
+            return
+
+        choice = messagebox.askyesnocancel(
+            "Optional Features",
+            "Semantic search requires optional dependencies (sentence-transformers, numpy).\n\n"
+            "Yes: Install now (uses disk space)\n"
+            "No: Continue without semantic features\n"
+            "Cancel: Exit"
+        )
+
+        if choice is None:
+            self.quit()
+            return
+
+        if choice:
+            self.status_bar.config(text="Installing semantic dependencies...")
+            self.update()
+            if try_install_semantic_deps() and refresh_semantic_imports():
+                SEMANTIC_ENABLED = True
+                self.set_semantic_ui_state(True)
+                messagebox.showinfo(
+                    "Install Complete",
+                    "Dependencies installed. You may need to restart the app if semantic search doesn't work immediately."
+                )
+            else:
+                SEMANTIC_ENABLED = False
+                self.set_semantic_ui_state(False)
+                messagebox.showwarning(
+                    "Install Failed",
+                    "Could not install dependencies. Semantic features will be disabled."
+                )
+        else:
+            SEMANTIC_ENABLED = False
+            self.set_semantic_ui_state(False)
     
     def build_extension(self, ext_dir):
         """Build the VS Code extension package. Returns True on success."""
@@ -1790,6 +1911,8 @@ if __name__ == "__main__":
     init_db()
     app = Chaits()
     app.status_bar.config(text="Starting up...")
+    # Ensure semantic feature choice is applied before indexing
+    app.check_semantic_prompt()
     # Start indexing in background after UI is ready
     threading.Thread(target=background_index, args=(app,), daemon=True).start()
     app.mainloop()

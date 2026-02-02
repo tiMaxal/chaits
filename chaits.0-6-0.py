@@ -26,6 +26,7 @@ SERVICE_DIRS = {
     "claude": BASE_DIR / "accounts_claude",
     "gemini": BASE_DIR / "accounts_gemini",
     "copilot": BASE_DIR / "accounts_copilot",
+    "perplexity": BASE_DIR / "accounts_perplexity",
 }
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
@@ -189,6 +190,34 @@ def normalize_timestamp(ts):
     except Exception:
         return None
 
+def parse_copilot_csv(path: Path):
+    """Parse Copilot desktop/web CSV export into conversation list."""
+    convos = {}
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            required = {"Conversation", "Time", "Author", "Message"}
+            if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
+                return []
+            for row in reader:
+                title = (row.get("Conversation") or "Untitled").strip() or "Untitled"
+                author = (row.get("Author") or "").strip().lower()
+                role = "assistant" if author in ("ai", "assistant", "copilot", "bot") else "user"
+                content = row.get("Message") or ""
+                ts_raw = row.get("Time")
+                convos.setdefault(title, {
+                    "title": title,
+                    "messages": []
+                })
+                convos[title]["messages"].append({
+                    "role": role,
+                    "content": content,
+                    "create_time": ts_raw
+                })
+    except Exception:
+        return []
+    return list(convos.values())
+
 def parse_generic(data):
     # ChatGPT format: root list with mapping field in each conversation
     if isinstance(data, list) and data and "mapping" in data[0]:
@@ -223,6 +252,24 @@ def parse_generic(data):
                     "messages": msgs
                 })
         return convos
+
+    # Perplexity-style: dict with messages[]
+    if isinstance(data, dict) and isinstance(data.get("messages"), list):
+        return [{
+            "id": data.get("id"),
+            "title": data.get("title", "Untitled"),
+            "messages": data.get("messages", [])
+        }]
+
+    # Perplexity-style: dict with chat.messages[]
+    if isinstance(data, dict) and isinstance(data.get("chat"), dict):
+        chat = data.get("chat", {})
+        if isinstance(chat.get("messages"), list):
+            return [{
+                "id": chat.get("id") or data.get("id"),
+                "title": chat.get("title", data.get("title", "Untitled")),
+                "messages": chat.get("messages", [])
+            }]
     
     # Generic list format
     if isinstance(data, list):
@@ -310,10 +357,12 @@ def index_json(service, account, path):
             conn.close()
             return
 
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        convos = parse_generic(data)
+        if path.suffix.lower() == ".csv":
+            convos = parse_copilot_csv(path)
+        else:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            convos = parse_generic(data)
         
         if not convos:
             print(f"Warning: No conversations found in {path}")
@@ -394,14 +443,18 @@ def auto_index():
             if not acc.is_dir():
                 continue
             
-            # Index JSON files in account root directory
+            # Index JSON/CSV files in account root directory
             for j in acc.glob("*.json"):
+                index_json(service, acc.name, j)
+            for j in acc.glob("*.csv"):
                 index_json(service, acc.name, j)
             
             # Also index files in exports/ subdirectory
             exp = acc / "exports"
             if exp.exists():
                 for j in exp.glob("*.json"):
+                    index_json(service, acc.name, j)
+                for j in exp.glob("*.csv"):
                     index_json(service, acc.name, j)
 
 # ===================== SEARCH =====================
@@ -683,6 +736,7 @@ class Chaits(tk.Tk):
         tk.Button(top, text="💬 Conversations", command=self.browse_conversations).pack(side="left")
         tk.Button(top, text="❓ How To", command=self.show_howto).pack(side="left")
         tk.Button(top, text="Exit", command=self.quit, bg="red", fg="white").pack(side="right", padx=5)
+        tk.Button(top, text="❤️", command=self.show_donation, fg="#e74c3c", font=("Arial", 10)).pack(side="right", padx=2)
 
         cols = ("Service","Account","Conversation","Time","Role","Snippet")
         self.tree = ttk.Treeview(self, columns=cols, show="headings")
@@ -706,6 +760,9 @@ class Chaits(tk.Tk):
         # Status bar at bottom
         self.status_bar = tk.Label(self, text="Ready", relief="sunken", anchor="w")
         self.status_bar.pack(side="bottom", fill="x")
+        
+        # Check for extension after UI is ready
+        self.after(500, self.check_extension_prompt)
 
     def fill(self, rows):
         self.tree.delete(*self.tree.get_children())
@@ -752,8 +809,12 @@ class Chaits(tk.Tk):
         """, (svc,acc,cid)).fetchall()
         conn.close()
 
+        self.show_conversation_window(svc, acc, cid, msgs, focus_mid=mid)
+
+    def show_conversation_window(self, service, account, conversation_id, msgs, focus_mid=None):
+        """Render a conversation window from a list of messages."""
         w = tk.Toplevel(self)
-        w.title(f"{svc}/{acc}")
+        w.title(f"{service}/{account}")
         w.geometry("800x600")
         w.bind("<Escape>", lambda e: w.destroy())
         
@@ -773,10 +834,11 @@ class Chaits(tk.Tk):
 
         btn_frame = tk.Frame(w)
         btn_frame.pack(fill="x", pady=5)
-        tk.Button(btn_frame, text="Similar (other accounts)",
-                  command=lambda: self.show(similar_other_accounts(mid, acc))).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="Find follow-ups",
-                  command=lambda: self.show(followups(mid))).pack(side="left", padx=5)
+        if focus_mid is not None:
+            tk.Button(btn_frame, text="Similar (other accounts)",
+                      command=lambda: self.show(similar_other_accounts(focus_mid, account))).pack(side="left", padx=5)
+            tk.Button(btn_frame, text="Find follow-ups",
+                      command=lambda: self.show(followups(focus_mid))).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Exit", command=w.destroy, bg="red", fg="white").pack(side="right", padx=5)
         
         w.focus_set()
@@ -806,7 +868,7 @@ class Chaits(tk.Tk):
         """Import specific JSON file"""
         path = filedialog.askopenfilename(
             title="Select Export File",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            filetypes=[("JSON or CSV files", "*.json;*.csv"), ("JSON files", "*.json"), ("CSV files", "*.csv"), ("All files", "*.*")]
         )
         if not path:
             return
@@ -977,6 +1039,26 @@ class Chaits(tk.Tk):
         except Exception as e:
             messagebox.showerror("Export Error", str(e))
     
+    def show_donation(self):
+        """Show donation information and open donation page"""
+        # Placeholder URL - to be updated when timax.al donation page is ready
+        donation_url = "https://timax.al/donate"  # TODO: Update with actual donation page URL
+        
+        message = (
+            "Support chaits Development\n\n"
+            "If you find chaits useful, consider supporting its development!\n\n"
+            "Your contribution helps maintain and improve this tool.\n\n"
+            "Donation options: Fiat and/or Crypto\n\n"
+            "Click OK to open the donation page in your browser."
+        )
+        
+        if messagebox.askyesno("Support chaits", message, icon="info"):
+            try:
+                import webbrowser
+                webbrowser.open(donation_url)
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not open browser: {e}\n\nPlease visit: {donation_url}")
+    
     def show_howto(self):
         """Display quick guide based on README"""
         w = tk.Toplevel(self)
@@ -997,6 +1079,9 @@ class Chaits(tk.Tk):
         scrollbar.config(command=text.yview)
         
         howto_text = """chaits - Cross-AI Chat Index & Discovery Tool
+
+AI-voding [vibe-coding] in VS-Code with Copilot by tiMaxal.
+ .. this is directed AI code creation, not written by a competent coder; all care possible has been taken, but no responsibility accepted for use by others!
 
 QUICK START:
 
@@ -1029,12 +1114,18 @@ QUICK START:
      - ChatGPT: Settings → Export data
      - Grok: Browser dev tools (API responses)
      - Claude/Gemini: Export from web interface
-   • For VS Code Copilot: Run export_vscode_copilot.py
+    • For VS Code Copilot: Run export_vscode_copilot.py
+    • For Copilot desktop/web: CSV export is supported
    • Place JSON in .aiccounts/accounts_{service}/{account}/exports/
    • Click 🔄 Refresh or 📁 Import
 
+ENHANCED TIMELINE TRACKING:
+   • Install chaits-tracker VS Code extension for per-message timestamps
+   • Enables accurate timeline reconstruction across workspace switches
+   • Settings → check for "Install Extension" prompt
+
 SUPPORTED SERVICES:
-   • ChatGPT  • Claude  • Gemini  • Grok  • GitHub Copilot
+    • ChatGPT  • Claude  • Gemini  • Grok  • GitHub Copilot  • Perplexity
 
 DIRECTORY STRUCTURE:
    .aiccounts/accounts_{service}/{account}/exports/*.json
@@ -1109,7 +1200,7 @@ For more details, see chaits.README.md"""
         scrollbar.pack(side="right", fill="y")
         tree.pack(fill="both", expand=True, pady=(0, 5))
         
-        tree.bind("<Double-1>", lambda e: self.open_conversation_from_browser(tree))
+        tree.bind("<Double-1>", lambda e: self.open_conversation_from_browser(tree, e))
         
         # Exit button
         tk.Button(browser, text="Exit", command=browser.destroy, bg="red", fg="white").pack(pady=5, padx=20, fill="x")
@@ -1168,13 +1259,19 @@ For more details, see chaits.README.md"""
             tree.insert("", "end", values=(service, account, title, msg_count, latest_str),
                        tags=(service, account, cid))
     
-    def open_conversation_from_browser(self, tree):
+    def open_conversation_from_browser(self, tree, event=None):
         """Open selected conversation from browser"""
-        selection = tree.selection()
-        if not selection:
+        item_id = None
+        if event is not None:
+            item_id = tree.identify_row(event.y)
+        if not item_id:
+            selection = tree.selection()
+            if selection:
+                item_id = selection[0]
+        if not item_id:
             return
         
-        tags = tree.item(selection[0], "tags")
+        tags = tree.item(item_id, "tags")
         if len(tags) < 3:
             return
         
@@ -1191,7 +1288,471 @@ For more details, see chaits.README.md"""
         conn.close()
         
         if not msgs:
+            messagebox.showinfo("No Messages", "This conversation has no messages.")
             return
+        
+        self.show_conversation_window(service, account, cid, msgs)
+    
+    def check_extension_prompt(self):
+        """Check if user should be prompted about chaits-tracker extension"""
+        # Don't prompt if already installed
+        if is_extension_installed():
+            return
+        
+        status = get_prompt_status()
+        
+        # Don't prompt if user chose "Never"
+        if status == 'ignored':
+            return
+        
+        # Prompt user
+        self.show_extension_install_dialog()
+    
+    def build_extension(self, ext_dir):
+        """Build the VS Code extension package. Returns True on success."""
+        try:
+            print("\n++ Building chaits-tracker extension...")
+            
+            # Check for required tools
+            npm_cmd = self.find_npm_command()
+            if not npm_cmd:
+                print("[-] npm not found - Node.js required")
+                messagebox.showerror("Build Error", "npm not found - Node.js required")
+                return False
+            
+            # Step 1: npm install
+            print("  + Running npm install...")
+            result = subprocess.run([npm_cmd, 'install'],
+                                  cwd=str(ext_dir),
+                                  capture_output=True,
+                                  text=True,
+                                  timeout=120)
+            if result.returncode != 0:
+                error_msg = f"npm install failed:\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+                print(f"[-] {error_msg}")
+                messagebox.showerror("Build Error", error_msg[:500])  # Truncate for dialog
+                return False
+            
+            # Step 2: npm run compile
+            print("  + Compiling TypeScript...")
+            result = subprocess.run([npm_cmd, 'run', 'compile'],
+                                  cwd=str(ext_dir),
+                                  capture_output=True,
+                                  text=True,
+                                  timeout=60)
+            if result.returncode != 0:
+                error_msg = f"Compile failed:\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+                print(f"[-] {error_msg}")
+                messagebox.showerror("Build Error", error_msg[:500])  # Truncate for dialog
+                return False
+            
+            # Step 3: Check for vsce, install if needed
+            vsce_cmd = self.find_vsce_command()
+            if not vsce_cmd:
+                print("  + Installing vsce...")
+                result = subprocess.run([npm_cmd, 'install', '-g', '@vscode/vsce'],
+                                      capture_output=True,
+                                      text=True,
+                                      timeout=60)
+                if result.returncode != 0:
+                    error_msg = f"Failed to install vsce:\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+                    print(f"[-] {error_msg}")
+                    messagebox.showerror("Build Error", error_msg[:500])
+                    return False
+                vsce_cmd = self.find_vsce_command()
+                if not vsce_cmd:
+                    print("[-] vsce still not found after installation")
+                    messagebox.showerror("Build Error", "vsce still not found after installation")
+                    return False
+            
+            # Step 4: Package extension
+            print("  + Packaging extension...")
+            result = subprocess.run([vsce_cmd, 'package', '--allow-missing-repository'],
+                                  cwd=str(ext_dir),
+                                  capture_output=True,
+                                  text=True,
+                                  timeout=60)
+            if result.returncode != 0:
+                error_msg = f"Packaging failed:\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+                print(f"[-] {error_msg}")
+                messagebox.showerror("Build Error", error_msg[:500])
+                return False
+            
+            print("[+] Extension built successfully!")
+            return True
+            
+        except subprocess.TimeoutExpired:
+            print("[-] Build timed out")
+            messagebox.showerror("Build Error", "Build timed out")
+            return False
+        except Exception as e:
+            error_msg = f"Build error: {e}"
+            print(f"[-] {error_msg}")
+            messagebox.showerror("Build Error", error_msg)
+            return False
+    
+    def find_npm_command(self):
+        """Find npm command (npm.cmd on Windows)"""
+        if os.name == 'nt':
+            # Windows - try npm.cmd
+            npm_paths = [
+                'npm.cmd',
+                r'C:\Program Files\nodejs\npm.cmd',
+                Path(os.environ.get('APPDATA', '')) / 'npm' / 'npm.cmd'
+            ]
+            for npm in npm_paths:
+                try:
+                    subprocess.run([str(npm), '--version'], capture_output=True, timeout=5)
+                    return str(npm)
+                except:
+                    pass
+        else:
+            # Unix-like
+            try:
+                subprocess.run(['npm', '--version'], capture_output=True, timeout=5)
+                return 'npm'
+            except:
+                pass
+        return None
+    
+    def find_vsce_command(self):
+        """Find vsce command (vsce.cmd on Windows)"""
+        if os.name == 'nt':
+            # Windows - try vsce.cmd
+            vsce_paths = [
+                'vsce.cmd',
+                Path(os.environ.get('APPDATA', '')) / 'npm' / 'vsce.cmd'
+            ]
+            for vsce in vsce_paths:
+                try:
+                    subprocess.run([str(vsce), '--version'], capture_output=True, timeout=5)
+                    return str(vsce)
+                except:
+                    pass
+        else:
+            # Unix-like
+            try:
+                subprocess.run(['vsce', '--version'], capture_output=True, timeout=5)
+                return 'vsce'
+            except:
+                pass
+        return None
+    
+    def find_vscode_command(self):
+        """Find VS Code CLI command"""
+        if os.name == 'nt':
+            # Windows - try multiple locations
+            code_paths = [
+                'code.cmd',
+                'code',
+                Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'Microsoft VS Code' / 'bin' / 'code.cmd',
+                Path(os.environ.get('PROGRAMFILES', 'C:\\Program Files')) / 'Microsoft VS Code' / 'bin' / 'code.cmd',
+                Path(os.environ.get('PROGRAMFILES(X86)', 'C:\\Program Files (x86)')) / 'Microsoft VS Code' / 'bin' / 'code.cmd',
+            ]
+            for code_cmd in code_paths:
+                try:
+                    result = subprocess.run([str(code_cmd), '--version'], 
+                                          capture_output=True, timeout=5)
+                    if result.returncode == 0:
+                        return str(code_cmd)
+                except:
+                    pass
+        else:
+            # Unix-like
+            try:
+                result = subprocess.run(['code', '--version'], capture_output=True, timeout=5)
+                if result.returncode == 0:
+                    return 'code'
+            except:
+                pass
+        return None
+    
+    def show_extension_install_dialog(self):
+        """Show dialog to install chaits-tracker extension"""
+        dialog = tk.Toplevel(self)
+        dialog.title("Enhanced Timeline Tracking")
+        dialog.geometry("600x400")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (600 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (400 // 2)
+        dialog.geometry(f"600x400+{x}+{y}")
+        
+        # Content frame
+        content = tk.Frame(dialog, padx=20, pady=20)
+        content.pack(fill="both", expand=True)
+        
+        # Title
+        title = tk.Label(content, text="Accurate Timeline Tracking Available",
+                        font=("Arial", 14, "bold"))
+        title.pack(pady=(0, 10))
+        
+        # Description
+        desc = tk.Text(content, wrap="word", height=10, font=("Arial", 10))
+        desc.pack(fill="both", expand=True, pady=10)
+        
+        desc.insert("1.0", """VS Code currently only stores when Copilot conversations start, not when individual messages were sent.
+
+The chaits-tracker extension solves this by recording exact timestamps for every interaction. This enables:
+
+[+] Accurate reconstruction of development timelines
+[+] Tracking work across multiple projects
+[+] Understanding when you actually did what
+[+] Correlation with Git commits and file edits
+
+Installation is one-click and syncs to all your machines via Settings Sync.
+
+Would you like to install the extension now?
+""")
+        desc.config(state="disabled")
+        
+        # Button frame
+        button_frame = tk.Frame(content)
+        button_frame.pack(pady=10)
+        
+        def install_extension():
+            set_prompt_status('installed')
+            dialog.destroy()
+            
+            ext_dir = Path(__file__).parent / "chaits-tracker-extension"
+            vsix_file = ext_dir / "chaits-tracker-0.1.0.vsix"
+            
+            # Auto-build if .vsix doesn't exist
+            if not vsix_file.exists() and ext_dir.exists():
+                # Check for Node.js/npm first
+                npm_cmd = self.find_npm_command()
+                if not npm_cmd:
+                    response = messagebox.askyesno(
+                        "Node.js Required",
+                        "Extension needs to be built, but Node.js/npm is not installed.\n\n"
+                        "Options:\n"
+                        "1. Install Node.js from https://nodejs.org/ then try again\n"
+                        "2. Ask someone to build it for you (creates .vsix file)\n"
+                        "3. Use chaits without the extension (session-level timestamps only)\n\n"
+                        "Would you like to open the Node.js download page?")
+                    if response:
+                        import webbrowser
+                        webbrowser.open('https://nodejs.org/')
+                    return
+                
+                build_result = self.build_extension(ext_dir)
+                if not build_result:
+                    messagebox.showerror("Build Failed", 
+                                       "Could not build extension automatically.\n\n"
+                                       "See chaits-tracker-extension/BUILD.md for manual instructions.")
+                    return
+            
+            # Install the .vsix
+            if vsix_file.exists():
+                # Find VS Code CLI
+                code_cmd = self.find_vscode_command()
+                if not code_cmd:
+                    messagebox.showwarning("Manual Installation Required",
+                                         f"VS Code 'code' command not found in PATH.\n\n"
+                                         f"To install manually:\n\n"
+                                         f"1. Open VS Code\n"
+                                         f"2. Press Ctrl+Shift+P\n"
+                                         f"3. Type: Extensions: Install from VSIX\n"
+                                         f"4. Select: {vsix_file.absolute()}\n\n"
+                                         f"Alternative: Add VS Code to PATH\n"
+                                         f"(VS Code → Ctrl+Shift+P → 'Shell Command: Install code command in PATH')")
+                    return
+                
+                try:
+                    print(f"++ Installing extension using: {code_cmd}")
+                    result = subprocess.run([code_cmd, '--install-extension', str(vsix_file.absolute())],
+                                          capture_output=True, text=True, timeout=30)
+                    if result.returncode == 0:
+                        messagebox.showinfo("Success", 
+                                          "Extension installed successfully!\n\n"
+                                          "Please restart VS Code to activate tracking.\n\n"
+                                          "The extension will automatically record timestamps "
+                                          "for all future Copilot chats.")
+                    else:
+                        messagebox.showerror("Error", 
+                                           f"Installation failed:\n{result.stderr}\n\n"
+                                           "You can install manually: See chaits-tracker-extension/INSTALL.md")
+                except Exception as e:
+                    messagebox.showerror("Error", 
+                                       f"Could not install extension:\n{e}\n\n"
+                                       "You can install manually: See chaits-tracker-extension/INSTALL.md")
+            else:
+                messagebox.showerror("Extension Not Found",
+                                   "Extension source code not found.\n\n"
+                                   "Please ensure chaits-tracker-extension/ directory exists.")
+        
+        def remind_later():
+            set_prompt_status('later')
+            dialog.destroy()
+        
+        def never_show():
+            set_prompt_status('ignored')
+            dialog.destroy()
+        
+        tk.Button(button_frame, text="✅ Install Extension", command=install_extension,
+                 bg="#4CAF50", fg="white", font=("Arial", 10, "bold"),
+                 padx=15, pady=5).pack(side="left", padx=5)
+        
+        tk.Button(button_frame, text="⏰ Remind Me Later", command=remind_later,
+                 font=("Arial", 10), padx=15, pady=5).pack(side="left", padx=5)
+        
+        tk.Button(button_frame, text="🚫 Don't Ask Again", command=never_show,
+                 font=("Arial", 10), padx=15, pady=5).pack(side="left", padx=5)
+    
+    def install_extension_dialog(self):
+        """Show instructions for installing the extension"""
+        dialog = tk.Toplevel(self)
+        dialog.title("Install chaits-tracker Extension")
+        dialog.geometry("700x500")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (700 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (500 // 2)
+        dialog.geometry(f"700x500+{x}+{y}")
+        
+        content = tk.Frame(dialog, padx=20, pady=20)
+        content.pack(fill="both", expand=True)
+        
+        title = tk.Label(content, text="Installing chaits-tracker Extension",
+                        font=("Arial", 14, "bold"))
+        title.pack(pady=(0, 10))
+        
+        instructions = tk.Text(content, wrap="word", font=("Arial", 10))
+        instructions.pack(fill="both", expand=True, pady=10)
+        
+        ext_dir = Path("chaits-tracker-extension")
+        vsix_file = ext_dir / "chaits-tracker-0.1.0.vsix"
+        
+        if vsix_file.exists():
+            # Extension package exists - show install command
+            instructions.insert("1.0", f"""[+] Extension package found!
+
+OPTION 1: Install via Command Line
+----------------------------------
+1. Open a terminal/command prompt
+2. Run this command:
+
+   code --install-extension "{vsix_file.absolute()}"
+
+3. Restart VS Code when prompted
+
+
+OPTION 2: Install via VS Code
+------------------------------
+1. Open VS Code
+2. Press Ctrl+Shift+X (Extensions view)
+3. Click the ⋯ menu (three dots at top)
+4. Select "Install from VSIX..."
+5. Navigate to: {vsix_file.absolute()}
+6. Click Install
+7. Restart VS Code when prompted
+
+
+After Installation:
+-------------------
+• You'll see a welcome screen explaining the features
+• Status bar will show: [Chaits]
+• Tracking starts automatically
+• Data syncs via VS Code Settings Sync
+
+Click "Open Folder" below to open the extension directory.
+""")
+            
+            button_frame = tk.Frame(content)
+            button_frame.pack(pady=10)
+            
+            def open_folder():
+                if os.name == 'nt':
+                    os.startfile(ext_dir.absolute())
+                elif os.name == 'posix':
+                    subprocess.run(['open' if 'darwin' in os.sys.platform else 'xdg-open', 
+                                  str(ext_dir.absolute())])
+            
+            def install_now():
+                try:
+                    result = subprocess.run(['code', '--install-extension', str(vsix_file.absolute())],
+                                          capture_output=True, text=True, timeout=30)
+                    if result.returncode == 0:
+                        messagebox.showinfo("Success", 
+                                          "Extension installed! Please restart VS Code to activate it.")
+                        dialog.destroy()
+                    else:
+                        messagebox.showerror("Error", 
+                                           f"Installation failed:\n{result.stderr}")
+                except Exception as e:
+                    messagebox.showerror("Error", f"Could not install extension:\n{e}")
+            
+            tk.Button(button_frame, text="🚀 Install Now", command=install_now,
+                     bg="#4CAF50", fg="white", font=("Arial", 10, "bold"),
+                     padx=15, pady=5).pack(side="left", padx=5)
+            
+            tk.Button(button_frame, text="📁 Open Folder", command=open_folder,
+                     font=("Arial", 10), padx=15, pady=5).pack(side="left", padx=5)
+            
+        else:
+            # Extension needs to be built
+            instructions.insert("1.0", f"""[!] Extension needs to be built first
+
+The extension source code is in: {ext_dir.absolute()}
+
+To build and install:
+---------------------
+1. Open a terminal in the extension directory:
+   cd "{ext_dir.absolute()}"
+
+2. Install dependencies:
+   npm install
+
+3. Build the extension:
+   npm run compile
+   npm run package
+
+4. Install the generated .vsix file:
+   code --install-extension chaits-tracker-0.1.0.vsix
+
+5. Restart VS Code
+
+
+Need Help?
+----------
+See BUILD.md in the extension directory for detailed instructions.
+See INSTALL.md for a beginner-friendly guide.
+""")
+            
+            button_frame = tk.Frame(content)
+            button_frame.pack(pady=10)
+            
+            def open_folder():
+                if os.name == 'nt':
+                    os.startfile(ext_dir.absolute())
+                elif os.name == 'posix':
+                    subprocess.run(['open' if 'darwin' in os.sys.platform else 'xdg-open',
+                                  str(ext_dir.absolute())])
+            
+            tk.Button(button_frame, text="📁 Open Extension Folder", command=open_folder,
+                     font=("Arial", 10, "bold"), padx=15, pady=5).pack(side="left", padx=5)
+        
+        instructions.config(state="disabled")
+        
+        tk.Button(content, text="Close", command=dialog.destroy,
+                 padx=20, pady=5).pack(pady=10)
+    
+    def show_conversation(self, service, account, conv_id):
+        """Show full conversation content"""
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute("""SELECT message_id, create_time, role, content 
+                      FROM messages 
+                      WHERE service=? AND account=? AND conversation_id=?
+                      ORDER BY create_time""", (service, account, conv_id))
+        msgs = cur.fetchall()
+        conn.close()
         
         w = tk.Toplevel(self)
         w.title(f"{service}/{account}")

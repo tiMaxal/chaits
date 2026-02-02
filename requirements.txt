@@ -1,1 +1,1 @@
-pip install sentence-transformers numpy
+pip install sentence-transformers numpy requests

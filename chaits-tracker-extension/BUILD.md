@@ -16,6 +16,7 @@ npm install
 ```
 
 This installs:
+
 - TypeScript compiler
 - VS Code extension types
 - ESLint for code quality
@@ -29,7 +30,14 @@ npm run compile
 
 This compiles all `.ts` files in `src/` to JavaScript in `out/`.
 
+#### IF issue with execution policy
+
+```bash
+npm.cmd run compile
+```
+
 **Watch mode** (auto-recompile on changes):
+
 ```bash
 npm run watch
 ```
@@ -41,14 +49,14 @@ npm install -g @vscode/vsce  # One-time install
 npm run package
 ```
 
-Creates: `chaits-tracker-0.1.0.vsix`
+Creates: `chaits-tracker-0.1.1.vsix`
 
 ### 4. Install Locally
 
 ```bash
 npm run install-local
 # Or manually:
-code --install-extension chaits-tracker-0.1.0.vsix
+code --install-extension chaits-tracker-0.1.1.vsix
 ```
 
 ## Development Workflow
@@ -56,6 +64,7 @@ code --install-extension chaits-tracker-0.1.0.vsix
 ### Testing During Development
 
 1. Open extension folder in VS Code:
+
    ```bash
    code chaits-tracker-extension
    ```
@@ -89,16 +98,19 @@ chaits-tracker-extension/
 ### Key Files
 
 **package.json**: Extension manifest
+
 - Defines commands, views, settings
 - Activation events
 - VS Code API version requirements
 
 **src/extension.ts**: Entry point
+
 - `activate()` - Called when extension loads
 - `deactivate()` - Cleanup on unload
 - Command registration
 
 **src/timestampTracker.ts**: Core tracking
+
 - Watches chat session files
 - Logs interactions with timestamps
 - Handles storage
@@ -165,13 +177,16 @@ npm run compile
 
 ### To VS Code Marketplace
 
-1. Get publisher account: https://marketplace.visualstudio.com/manage
+1. Get publisher account: <https://marketplace.visualstudio.com/manage>
 2. Create Personal Access Token (Azure DevOps)
 3. Login with vsce:
+
    ```bash
    vsce login your-publisher-name
    ```
+
 4. Publish:
+
    ```bash
    vsce publish
    ```
@@ -186,6 +201,7 @@ npm run compile
 ## Updating Version
 
 Edit `package.json`:
+
 ```json
 {
   "version": "0.2.0"  // Increment
@@ -265,6 +281,6 @@ output.show();
 
 ## Need Help?
 
-- **VS Code Extension API**: https://code.visualstudio.com/api
-- **Extension Examples**: https://github.com/microsoft/vscode-extension-samples
-- **Publishing Guide**: https://code.visualstudio.com/api/working-with-extensions/publishing-extension
+- **VS Code Extension API**: <https://code.visualstudio.com/api>
+- **Extension Examples**: <https://github.com/microsoft/vscode-extension-samples>
+- **Publishing Guide**: <https://code.visualstudio.com/api/working-with-extensions/publishing-extension>

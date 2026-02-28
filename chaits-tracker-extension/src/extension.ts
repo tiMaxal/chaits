@@ -6,7 +6,7 @@ import { ExportManager } from './exportManager';
 
 let tracker: TimestampTracker;
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
     console.log('Chaits Tracker is now active');
 
     // Initialize core components

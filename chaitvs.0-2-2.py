@@ -28,45 +28,68 @@ def load_extension_timestamps():
     Returns dict mapping sessionId -> list of timestamps.
     Gracefully returns empty dict if extension not installed.
     """
-    try:
+    def candidate_global_storage_dirs():
+        candidates = []
+
         if os.name == 'nt':  # Windows
-            global_storage = Path(os.environ.get('APPDATA', '')) / 'Code' / 'User' / 'globalStorage' / 'chaits-tracker' / 'interaction-logs'
+            appdata = Path(os.environ.get('APPDATA', ''))
+            products = [
+                'Code', 'Code - Insiders', 'VSCodium', 'Code - OSS',
+                'Cursor', 'Cursor - Insiders'
+            ]
+            for product in products:
+                candidates.append(appdata / product / 'User' / 'globalStorage')
         elif os.name == 'posix':
             if 'darwin' in os.sys.platform:  # Mac
-                global_storage = Path.home() / 'Library' / 'Application Support' / 'Code' / 'User' / 'globalStorage' / 'chaits-tracker' / 'interaction-logs'
+                base = Path.home() / 'Library' / 'Application Support'
+                products = ['Code', 'Code - Insiders', 'VSCodium', 'Code - OSS', 'Cursor']
+                for product in products:
+                    candidates.append(base / product / 'User' / 'globalStorage')
             else:  # Linux
-                global_storage = Path.home() / '.config' / 'Code' / 'User' / 'globalStorage' / 'chaits-tracker' / 'interaction-logs'
-        else:
+                base = Path.home() / '.config'
+                products = ['Code', 'Code - Insiders', 'VSCodium', 'Code - OSS', 'Cursor']
+                for product in products:
+                    candidates.append(base / product / 'User' / 'globalStorage')
+
+        # Filter to existing
+        return [c for c in candidates if c.exists()]
+
+    try:
+        global_storage_dirs = candidate_global_storage_dirs()
+        if not global_storage_dirs:
             return {}
-        
-        if not global_storage.exists():
-            return {}  # Extension not installed
-        
-        print(f"  ++ Loading chaits-tracker extension data...")
+
+        print("  ++ Loading chaits-tracker extension data...")
         session_timestamps = {}
-        
-        for session_file in global_storage.glob('session-*.jsonl'):
-            session_id = session_file.stem.replace('session-', '')
-            timestamps = []
-            
-            try:
-                with open(session_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.strip():
-                            interaction = json.loads(line)
-                            timestamps.append({
-                                'timestamp': interaction['timestamp'],
-                                'role': interaction['role']
-                            })
-                
-                if timestamps:
-                    session_timestamps[session_id] = timestamps
-            except Exception:
-                pass
-        
+
+        for base_dir in global_storage_dirs:
+            global_storage = base_dir / 'chaits-tracker' / 'interaction-logs'
+            if not global_storage.exists():
+                continue
+
+            for session_file in global_storage.glob('session-*.jsonl'):
+                session_id = session_file.stem.replace('session-', '')
+                timestamps = []
+
+                try:
+                    with open(session_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            if line.strip():
+                                interaction = json.loads(line)
+                                timestamps.append({
+                                    'timestamp': interaction['timestamp'],
+                                    'role': interaction['role']
+                                })
+
+                    if timestamps:
+                        if session_id not in session_timestamps or len(timestamps) > len(session_timestamps[session_id]):
+                            session_timestamps[session_id] = timestamps
+                except Exception:
+                    pass
+
         if session_timestamps:
             print(f"  + Enhanced timestamps available for {len(session_timestamps)} sessions")
-        
+
         return session_timestamps
     except Exception:
         return {}
@@ -189,6 +212,19 @@ def export_chat_to_markdown(conversation, output_path):
     messages = conversation.get('messages', [])
     title = conversation.get('conversation_title', 'Untitled Chat')
     create_time = conversation.get('create_time', 0)
+
+    def format_msg_timestamp(ts_value):
+        if not ts_value:
+            return "Unknown time"
+        try:
+            # Extension timestamps are stored in ms
+            if isinstance(ts_value, (int, float)) and ts_value > 1e12:
+                return datetime.fromtimestamp(ts_value / 1000).strftime('%Y-%m-%d %H:%M:%S')
+            if isinstance(ts_value, (int, float)):
+                return datetime.fromtimestamp(ts_value).strftime('%Y-%m-%d %H:%M:%S')
+            return str(ts_value)
+        except Exception:
+            return "Unknown time"
     
     # Format creation date
     if create_time:
@@ -210,13 +246,15 @@ def export_chat_to_markdown(conversation, output_path):
     for i, msg in enumerate(messages, 1):
         role = msg.get('role', 'unknown')
         content = msg.get('content', '')
+        msg_ts = format_msg_timestamp(msg.get('timestamp'))
+        heading_prefix = f"[{i:03d}] {msg_ts} — "
         
         if role == 'user':
-            md_lines.append(f"## 👤 User")
+            md_lines.append(f"## {heading_prefix}👤 User")
         elif role == 'assistant':
-            md_lines.append(f"## 🤖 Assistant")
+            md_lines.append(f"## {heading_prefix}🤖 Assistant")
         else:
-            md_lines.append(f"## {role.title()}")
+            md_lines.append(f"## {heading_prefix}{role.title()}")
         
         md_lines.append("")
         md_lines.append(content)

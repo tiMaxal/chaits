@@ -24,6 +24,7 @@ interface TrackerStats {
 export class TimestampTracker {
     private context: vscode.ExtensionContext;
     private storageDir: string;
+    private workspaceStoragePath: string;
     private currentSessionId: string | null = null;
     private watcher: vscode.FileSystemWatcher | null = null;
     private gitWatcher: vscode.Disposable | null = null;
@@ -36,6 +37,9 @@ export class TimestampTracker {
             context.globalStorageUri.fsPath,
             'interaction-logs'
         );
+
+        // Resolve workspaceStorage path from the same VS Code product as globalStorage
+        this.workspaceStoragePath = this.resolveWorkspaceStoragePath();
         
         // Ensure storage directory exists
         if (!fs.existsSync(this.storageDir)) {
@@ -77,8 +81,11 @@ export class TimestampTracker {
 
     private watchChatSessions() {
         // Watch VS Code's workspace storage for chat session changes
-        const appData = process.env.APPDATA || process.env.HOME + '/.config';
-        const workspaceStoragePath = path.join(appData, 'Code', 'User', 'workspaceStorage');
+        const workspaceStoragePath = this.workspaceStoragePath;
+        if (!fs.existsSync(workspaceStoragePath)) {
+            console.warn(`Chaits tracking: workspaceStorage not found at ${workspaceStoragePath}`);
+            return;
+        }
 
         // Create file system watcher for chat sessions
         const pattern = new vscode.RelativePattern(workspaceStoragePath, '**/chatSessions/*.json');
@@ -92,10 +99,13 @@ export class TimestampTracker {
     }
 
     private async scanExistingSessions() {
-        const appData = process.env.APPDATA || process.env.HOME + '/.config';
-        const workspaceStoragePath = path.join(appData, 'Code', 'User', 'workspaceStorage');
+        const workspaceStoragePath = this.workspaceStoragePath;
 
         try {
+            if (!fs.existsSync(workspaceStoragePath)) {
+                console.warn(`Chaits tracking: workspaceStorage not found at ${workspaceStoragePath}`);
+                return;
+            }
             const workspaceDirs = fs.readdirSync(workspaceStoragePath);
             
             for (const workspaceDir of workspaceDirs) {
@@ -241,8 +251,7 @@ export class TimestampTracker {
 
     private getWorkspaceName(hash: string): string {
         // Try to resolve workspace name from workspace.json
-        const appData = process.env.APPDATA || process.env.HOME + '/.config';
-        const workspacePath = path.join(appData, 'Code', 'User', 'workspaceStorage', hash, 'workspace.json');
+        const workspacePath = path.join(this.workspaceStoragePath, hash, 'workspace.json');
         
         try {
             if (fs.existsSync(workspacePath)) {
@@ -261,6 +270,24 @@ export class TimestampTracker {
         }
 
         return hash.substring(0, 8);
+    }
+
+    private resolveWorkspaceStoragePath(): string {
+        // Prefer path based on globalStorage to match the running VS Code product
+        try {
+            const globalStorageDir = this.context.globalStorageUri.fsPath;
+            const userDir = path.resolve(globalStorageDir, '..', '..');
+            const candidate = path.join(userDir, 'workspaceStorage');
+            if (fs.existsSync(candidate)) {
+                return candidate;
+            }
+        } catch {
+            // Ignore and fall back
+        }
+
+        // Fallback to default stable path
+        const appData = process.env.APPDATA || process.env.HOME + '/.config';
+        return path.join(appData, 'Code', 'User', 'workspaceStorage');
     }
 
     private getOpenFiles(): string[] {

@@ -2,7 +2,7 @@
   "name": "chaits-tracker",
   "displayName": "Chaits Timestamp Tracker",
   "description": "Track per-message timestamps for Copilot chats across all workspaces - enables accurate project timeline reconstruction",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "chaits",
   "engines": {
     "vscode": "^1.85.0"

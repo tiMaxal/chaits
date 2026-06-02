@@ -25,6 +25,7 @@ export class TimestampTracker {
     private context: vscode.ExtensionContext;
     private storageDir: string;
     private workspaceStoragePath: string;
+    private currentWorkspaceHash: string | null;
     private currentSessionId: string | null = null;
     private watcher: vscode.FileSystemWatcher | null = null;
     private gitWatcher: vscode.Disposable | null = null;
@@ -40,6 +41,7 @@ export class TimestampTracker {
 
         // Resolve workspaceStorage path from the same VS Code product as globalStorage
         this.workspaceStoragePath = this.resolveWorkspaceStoragePath();
+        this.currentWorkspaceHash = this.resolveCurrentWorkspaceHash();
         
         // Ensure storage directory exists
         if (!fs.existsSync(this.storageDir)) {
@@ -87,8 +89,14 @@ export class TimestampTracker {
             return;
         }
 
-        // Create file system watcher for chat sessions
-        const pattern = new vscode.RelativePattern(workspaceStoragePath, '**/chatSessions/*.json');
+        // Watch only the current workspace hash when available.
+        let pattern: vscode.GlobPattern;
+        if (this.currentWorkspaceHash) {
+            const chatSessionsPath = path.join(workspaceStoragePath, this.currentWorkspaceHash, 'chatSessions');
+            pattern = new vscode.RelativePattern(chatSessionsPath, '*.json');
+        } else {
+            pattern = new vscode.RelativePattern(workspaceStoragePath, '**/chatSessions/*.json');
+        }
         this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
         this.watcher.onDidChange(uri => this.handleChatSessionChange(uri));
@@ -106,7 +114,9 @@ export class TimestampTracker {
                 console.warn(`Chaits tracking: workspaceStorage not found at ${workspaceStoragePath}`);
                 return;
             }
-            const workspaceDirs = fs.readdirSync(workspaceStoragePath);
+            const workspaceDirs = this.currentWorkspaceHash
+                ? [this.currentWorkspaceHash]
+                : fs.readdirSync(workspaceStoragePath);
             
             for (const workspaceDir of workspaceDirs) {
                 const chatSessionsPath = path.join(workspaceStoragePath, workspaceDir, 'chatSessions');
@@ -127,10 +137,17 @@ export class TimestampTracker {
 
     private async handleChatSessionChange(uri: vscode.Uri) {
         const workspaceHash = this.extractWorkspaceHash(uri.fsPath);
+        if (this.currentWorkspaceHash && workspaceHash !== this.currentWorkspaceHash) {
+            return;
+        }
         await this.processChatSession(uri.fsPath, workspaceHash);
     }
 
     private async processChatSession(sessionPath: string, workspaceHash: string) {
+        if (this.currentWorkspaceHash && workspaceHash !== this.currentWorkspaceHash) {
+            return;
+        }
+
         try {
             const content = fs.readFileSync(sessionPath, 'utf-8');
             const session = JSON.parse(content);
@@ -290,6 +307,32 @@ export class TimestampTracker {
         return path.join(appData, 'Code', 'User', 'workspaceStorage');
     }
 
+    private resolveCurrentWorkspaceHash(): string | null {
+        try {
+            if (!this.context.storageUri) {
+                return null;
+            }
+            // storageUri path looks like .../workspaceStorage/<hash>/publisher.extension
+            const workspaceHash = path.basename(path.dirname(this.context.storageUri.fsPath));
+            return workspaceHash || null;
+        } catch {
+            return null;
+        }
+    }
+
+    private isCurrentWorkspaceInteraction(interaction: Partial<ChatInteraction>): boolean {
+        if (this.currentWorkspaceHash) {
+            return interaction.workspaceHash === this.currentWorkspaceHash;
+        }
+
+        const currentWorkspaceName = this.getCurrentWorkspaceName();
+        if (!currentWorkspaceName) {
+            return true;
+        }
+
+        return interaction.workspaceName === currentWorkspaceName;
+    }
+
     private getOpenFiles(): string[] {
         return vscode.window.visibleTextEditors
             .map(editor => editor.document.fileName)
@@ -339,7 +382,10 @@ export class TimestampTracker {
                     return interactions;
                 }
                 try {
-                    interactions.push(JSON.parse(line));
+                    const interaction = JSON.parse(line) as ChatInteraction;
+                    if (this.isCurrentWorkspaceInteraction(interaction)) {
+                        interactions.push(interaction);
+                    }
                 } catch (err) {
                     // Skip malformed lines
                 }
@@ -364,7 +410,10 @@ export class TimestampTracker {
             
             for (const line of lines) {
                 try {
-                    const interaction = JSON.parse(line);
+                    const interaction = JSON.parse(line) as ChatInteraction;
+                    if (!this.isCurrentWorkspaceInteraction(interaction)) {
+                        continue;
+                    }
                     totalInteractions++;
                     sessions.add(interaction.sessionId);
                     oldestTimestamp = Math.min(oldestTimestamp, interaction.timestamp);
@@ -385,5 +434,20 @@ export class TimestampTracker {
 
     public getStorageDir(): string {
         return this.storageDir;
+    }
+
+    public getWorkspaceStoragePath(): string {
+        return this.workspaceStoragePath;
+    }
+
+    public getCurrentWorkspaceHash(): string | null {
+        return this.currentWorkspaceHash;
+    }
+
+    public getCurrentWorkspaceName(): string | null {
+        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            return path.basename(vscode.workspace.workspaceFolders[0].uri.fsPath);
+        }
+        return null;
     }
 }
